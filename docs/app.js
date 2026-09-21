@@ -149,33 +149,88 @@ async function buildShadow(day, onlyDialog) {
   return { kind: onlyDialog ? 'dialog' : 'shadow', day, url, marks, dur: t, label: `Day ${day} ${onlyDialog ? '대화' : '쉐도잉'}` };
 }
 
-// 복습: 한국어(TTS) → 쉼 → 영어 → 영어
+// ───────────────────────── 간격 반복 (SRS)
+// 문장마다 box(0=새것)와 due(일 단위). 맞으면 box+1 → 간격 확대, 틀리면 box 0 → 다음날 다시.
+const INTERVALS = [0, 1, 3, 7, 14, 30, 60];
+const srs = load('eng100.srs', {});
+const today = () => Math.floor(Date.now() / 86400000);
+const srsKey = (r) => r.koAudio;
+function srsGet(k) { return srs[k] ??= { box: 0, due: today(), right: 0, wrong: 0 }; }
+function srsGrade(k, ok) {
+  const s = srsGet(k);
+  if (ok) { s.right++; s.box = Math.min(s.box + 1, INTERVALS.length - 1); s.due = today() + INTERVALS[s.box]; }
+  else { s.wrong++; s.box = 0; s.due = today(); }
+  s.last = today(); save('eng100.srs', srs);
+}
+// 쉐도잉을 마친 Day의 문장을 복습 대상으로 등록 (내일부터)
+function srsEnroll(day) {
+  for (const r of dayByNum(day)?.review || []) { const k = srsKey(r); if (!srs[k]) { srs[k] = { box: 1, due: today() + 1, right: 0, wrong: 0 }; } }
+  save('eng100.srs', srs);
+}
+// 지금까지 배운 문장 = 등록된 것 (쉐도잉을 한 번이라도 끝낸 Day). 현재 Day와 무관하게 전체.
+function learnedItems() {
+  const out = [];
+  for (let k = 1; k <= 100; k++) for (const r of dayByNum(k)?.review || []) if (srs[srsKey(r)]) out.push({ ...r, day: k });
+  return out;
+}
+function dueItems() { return learnedItems().filter(r => srsGet(srsKey(r)).due <= today()); }
+
+// 복습: 오늘 도래한 문장 (부족하면 곧 도래할 것으로 채움)
 function pickReview(day) {
-  const cur = dayByNum(day)?.review || [];
-  const pool = [];
-  for (let k = Math.max(1, day - settings.reviewDays); k < day; k++) pool.push(...(dayByNum(k)?.review || []).map(r => ({ ...r, day: k })));
-  shuffle(pool);
-  const picked = [...cur.map(r => ({ ...r, day })), ...pool.slice(0, Math.max(0, settings.reviewCount - cur.length))];
+  const learned = learnedItems();
+  const due = dueItems().sort((a, b) => { const A = srsGet(srsKey(a)), B = srsGet(srsKey(b)); return (A.due - B.due) || (B.wrong - A.wrong); });
+  let picked = shuffle(due).slice(0, settings.reviewCount);
+  if (picked.length < Math.min(5, learned.length)) {
+    const rest = learned.filter(r => !picked.includes(r)).sort((a, b) => srsGet(srsKey(a)).due - srsGet(srsKey(b)).due);
+    picked = picked.concat(rest.slice(0, Math.min(settings.reviewCount, learned.length) - picked.length));
+  }
   return shuffle(picked);
 }
-async function buildReview(day) {
-  const list = pickReview(day);
-  if (!list.length) throw new Error('복습할 문장이 없습니다');
+// 퀴즈: 배운 것 전체에서 랜덤 N개
+function pickQuiz() { return shuffle(learnedItems()).slice(0, settings.reviewCount); }
+
+// 한국어(TTS) → 쉼 → 영어 → 영어. 문장마다 q(문제)/a(정답) 마크. ⏮ = 틀림 표시 + 정답 다시 듣기
+async function buildRecall(day, kind) {
+  const list = kind === 'quiz' ? pickQuiz(day) : pickReview(day);
+  if (!list.length) return null;   // 배운 문장이 없으면 건너뜀
+  const label = kind === 'quiz' ? '퀴즈' : '복습';
   const items = [], marks = []; let t = 0.6;
   for (let i = 0; i < list.length; i++) {
     const r = list[i];
     const ko = await decodeFile(r.koAudio), en = await decodeFile(r.audio);
     const gk = 0.8 / peakOf(ko), ge = 0.85 / peakOf(en);
-    const edur = r.e - r.s;
-    marks.push({ t, step: `복습 ${i + 1}/${list.length} · Day ${r.day}`, en: '…', ko: r.ko });
+    const edur = r.e - r.s, step = `${label} ${i + 1}/${list.length} · Day ${r.day}`;
+    marks.push({ t, step, en: '…', ko: r.ko, qi: i, phase: 'q' });
     items.push({ buf: ko, offset: 0, dur: ko.duration, gain: gk, t }); t += ko.duration + Math.max(2.2, edur * settings.gap + 0.8);
-    marks.push({ t, step: `복습 ${i + 1}/${list.length} · Day ${r.day}`, en: r.en, ko: r.ko });
+    marks.push({ t, step, en: r.en, ko: r.ko, qi: i, phase: 'a' });
     items.push({ buf: en, offset: r.s, dur: edur, gain: ge, t }); t += edur + 0.7;
     items.push({ buf: en, offset: r.s, dur: edur, gain: ge, t }); t += edur + edur * settings.gap + 0.9;
   }
   const url = await renderPlan(items, t);
-  return { kind: 'review', day, url, marks, dur: t, label: `Day ${day} 복습` };
+  return { kind, day, url, marks, dur: t, label: `Day ${day} ${label}`, list, wrong: new Set(), answered: new Set(), graded: false };
 }
+const buildReview = (day) => buildRecall(day, 'review');
+const buildQuiz = (day) => buildRecall(day, 'quiz');
+
+// 트랙이 끝나거나 떠날 때 채점 반영: 정답까지 들은 문장 중 ⏮ 안 누른 것 = 맞음
+function gradeTrack(tr) {
+  if (!tr || tr.graded || !tr.list) return;
+  tr.graded = true;
+  let right = 0, wrong = 0;
+  for (const i of tr.answered) { const ok = !tr.wrong.has(i); srsGrade(srsKey(tr.list[i]), ok); ok ? right++ : wrong++; }
+  if (right + wrong === 0) return;
+  if (tr.kind === 'quiz') showResult(tr, right, wrong);
+  else toast(`복습 ${right + wrong}문장 · 틀림 ${wrong}`);
+}
+function showResult(tr, right, wrong) {
+  const wrongList = [...tr.wrong].map(i => tr.list[i]);
+  $('resScore').textContent = `${right} / ${right + wrong}`;
+  $('resList').innerHTML = wrongList.length
+    ? '<b>틀린 문장</b> (내일 복습에 다시 나옵니다)<br>' + wrongList.map(r => `<div class="ri"><div>${esc(r.en)}</div><div class="k">${esc(r.ko)}</div></div>`).join('')
+    : '전부 맞았어요 👏';
+  $('ovResult').classList.add('show');
+}
+const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
 async function buildLecture(day) {
   const d = dayByNum(day);
@@ -197,9 +252,14 @@ async function startQueue(builders) {
     stopAll();
     setNow('준비 중…', '트랙을 만드는 중입니다', '');
     queue = []; qi = -1;
-    const first = await builders[0](); queue.push(first);
-    playTrack(0);
-    for (let i = 1; i < builders.length; i++) queue.push(await builders[i]());   // 나머지는 재생 중 미리 렌더링
+    let started = false;
+    for (const b of builders) {
+      const tr = await b();                     // null = 건너뜀 (예: 복습할 문장 없음)
+      if (!tr) continue;
+      queue.push(tr);
+      if (!started) { started = true; playTrack(0); }   // 첫 트랙은 바로 재생, 나머지는 재생 중 렌더링
+    }
+    if (!started) { setNow('대기 중', '재생할 것이 없습니다', ''); toast('아직 배운 문장이 없어요. 쉐도잉부터!'); }
   } catch (e) { console.error(e); toast('오류: ' + e.message); setNow('오류', e.message, ''); }
   finally { building = false; }
 }
@@ -212,6 +272,7 @@ function playTrack(i) {
   mediaMeta();
 }
 function stopAll() {
+  gradeTrack(cur);
   player.pause(); player.removeAttribute('src'); player.load();
   for (const t of queue) if (t.url.startsWith('blob:')) URL.revokeObjectURL(t.url);
   queue = []; qi = -1; cur = null;
@@ -225,8 +286,8 @@ function onTrackEnded() {
   if (!cur) return;
   const p = dayProg(cur.day); p.last = Date.now();
   if (cur.kind === 'lecture') p.lectured = true;
-  if (cur.kind === 'shadow' || cur.kind === 'dialog') p.passes += settings.passes;
-  if (cur.kind === 'review') p.reviews += 1;
+  if (cur.kind === 'shadow' || cur.kind === 'dialog') { p.passes += settings.passes; srsEnroll(cur.day); }
+  if (cur.kind === 'review' || cur.kind === 'quiz') { p.reviews += 1; gradeTrack(cur); }
   progress.lastDay = cur.day; save('eng100.progress', progress);
   if (qi + 1 < queue.length) playTrack(qi + 1);
   else if (building) { player.pause(); waitNext(); }   // 다음 트랙 렌더링이 아직 안 끝난 경우
@@ -252,7 +313,9 @@ function updateMark(force) {
   if (idx === markIdx && !force) return;
   markIdx = idx;
   const m = cur.marks[Math.max(0, idx)] || {};
-  setNow(m.step || cur.label, m.en || '', m.ko || '');
+  if (m.phase === 'a' && cur.answered) cur.answered.add(m.qi);   // 정답까지 들음 → 채점 대상
+  const flag = cur.wrong?.has(m.qi) ? ' ✗' : '';
+  setNow((m.step || cur.label) + flag, m.en || '', m.ko || '');
   mediaMeta(m);
 }
 function setNow(step, en, ko) { $('npStep').textContent = step; $('npEn').textContent = en; $('npKo').textContent = ko; }
@@ -262,14 +325,26 @@ function seekMark(delta) {
   if (!cur) return;
   if (cur.kind === 'lecture') { player.currentTime = Math.max(0, player.currentTime + (delta > 0 ? 30 : -15)); return; }
   let idx = currentMarkIndex();
-  if (delta < 0 && idx >= 0 && player.currentTime - cur.marks[idx].t > 2.0) { /* 같은 문장 처음으로 */ }
-  else idx += delta;
-  if (idx >= cur.marks.length) { skipTrack(); return; }
-  idx = Math.max(0, idx);
+  if (cur.list) {   // 복습·퀴즈: ⏮ = 이 문장 틀림 표시 + 정답 다시 듣기, ⏭ = 다음 문제
+    const m = cur.marks[Math.max(0, idx)];
+    if (delta < 0) {
+      cur.wrong.add(m.qi); cur.answered.add(m.qi);
+      idx = cur.marks.findIndex(x => x.qi === m.qi && x.phase === 'a');
+      toast('✗ 틀림 — 내일 다시');
+    } else {
+      idx = cur.marks.findIndex((x, i) => i > idx && x.phase === 'q');
+      if (idx < 0) { skipTrack(); return; }
+    }
+  } else {
+    if (delta < 0 && idx >= 0 && player.currentTime - cur.marks[idx].t > 2.0) { /* 같은 문장 처음으로 */ }
+    else idx += delta;
+    if (idx >= cur.marks.length) { skipTrack(); return; }
+    idx = Math.max(0, idx);
+  }
   player.currentTime = cur.marks[idx].t; markIdx = -1; updateMark(true);
   if (player.paused) player.play();
 }
-function skipTrack() { if (!cur) return; if (qi + 1 < queue.length) playTrack(qi + 1); else if (building) waitNext(); else finish(); }
+function skipTrack() { if (!cur) return; gradeTrack(cur); if (qi + 1 < queue.length) playTrack(qi + 1); else if (building) waitNext(); else finish(); }
 function togglePlay() {
   if (!cur) { runRoutine(); return; }
   if (player.paused) player.play(); else player.pause();
@@ -302,16 +377,16 @@ if ('mediaSession' in navigator) {
 let day = progress.lastDay || 1;
 function routineBuilders(d) {
   const p = dayProg(d);
-  const b = [];
+  const b = [() => buildReview(d)];   // 복습 먼저 (머리 맑을 때 인출), 배운 게 없으면 자동 건너뜀
   if (settings.lecture === 'always' || (settings.lecture === 'first' && !p.lectured)) b.push(() => buildLecture(d));
   b.push(() => buildShadow(d, false));
-  b.push(() => buildReview(d));
   return b;
 }
 function routineDesc(d) {
   const p = dayProg(d);
   const lec = settings.lecture === 'always' || (settings.lecture === 'first' && !p.lectured);
-  return `${lec ? '강의 → ' : ''}쉐도잉 ${settings.passes}회 → 복습 ${settings.reviewCount}문장`;
+  const due = DATA ? dueItems().length : 0;
+  return `${due ? `복습 ${due}문장 → ` : ''}${lec ? '강의 → ' : ''}쉐도잉 ${settings.passes}회`;
 }
 function runRoutine() { startQueue(routineBuilders(day)); }
 
@@ -325,7 +400,7 @@ function refreshHome() {
   const d = dayByNum(day);
   $('dayTitle').textContent = d ? d.title : (DATA ? '' : '자료 없음 — 📦 눌러서 불러오기');
   const p = dayProg(day);
-  $('dayStat').textContent = d ? `문장 ${d.units.length}개 · 강의 ${p.lectured ? '✓' : '–'} · 쉐도잉 ${p.passes}회 · 복습 ${p.reviews}회` : '';
+  $('dayStat').textContent = d ? `문장 ${d.units.length}개 · 강의 ${p.lectured ? '✓' : '–'} · 쉐도잉 ${p.passes}회 · 배운 문장 ${learnedItems().length}개` : '';
   $('routineDesc').textContent = routineDesc(day);
 }
 $('dayMinus').onclick = () => setDay(day - 1);
@@ -333,6 +408,8 @@ $('dayPlus').onclick = () => setDay(day + 1);
 $('mRoutine').onclick = runRoutine;
 $('mShadow').onclick = () => startQueue([() => buildShadow(day, false)]);
 $('mDialog').onclick = () => startQueue([() => buildShadow(day, true)]);
+$('mQuiz').onclick = () => startQueue([() => buildQuiz(day)]);
+$('closeResult').onclick = () => $('ovResult').classList.remove('show');
 $('mReview').onclick = () => startQueue([() => buildReview(day)]);
 $('mLecture').onclick = () => startQueue([() => buildLecture(day)]);
 $('cPlay').onclick = togglePlay;
@@ -374,7 +451,7 @@ function renderSettings() {
 }
 $('btnSettings').onclick = () => { renderSettings(); $('ovSettings').classList.add('show'); };
 $('closeSettings').onclick = () => $('ovSettings').classList.remove('show');
-$('btnResetProgress').onclick = () => { if (!confirm('진도를 초기화할까요?')) return; progress.days = {}; progress.lastDay = 1; save('eng100.progress', progress); setDay(1); };
+$('btnResetProgress').onclick = () => { if (!confirm('진도를 초기화할까요?')) return; progress.days = {}; progress.lastDay = 1; save('eng100.progress', progress); for (const k in srs) delete srs[k]; save('eng100.srs', srs); setDay(1); };
 
 let toastT;
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2500); }
