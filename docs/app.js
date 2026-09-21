@@ -41,7 +41,7 @@ async function loadData() {
 }
 
 // pack.zip 가져오기 (스트리밍 해제 → IndexedDB)
-async function importZip(file) {
+async function importZip(file) {   // file: File, 또는 {stream(), size} (개발용 URL 가져오기)
   const prog = $('impProg'), bar = prog.querySelector('i'), msg = $('impMsg');
   prog.classList.remove('hidden'); msg.textContent = '불러오는 중… (몇 분 걸릴 수 있어요. 화면을 켜 두세요)';
   const unz = new fflate.Unzip(); unz.register(fflate.UnzipInflate);
@@ -338,7 +338,7 @@ $('mLecture').onclick = () => startQueue([() => buildLecture(day)]);
 $('cPlay').onclick = togglePlay;
 $('cPrev').onclick = () => seekMark(-1);
 $('cNext').onclick = () => seekMark(1);
-$('npStep').onclick = () => { if (cur) { skipTrack(); toast('다음 단계로'); } };
+$('npSkip').onclick = () => { if (cur) { skipTrack(); toast('다음 단계로'); } };
 
 // 자료 overlay
 function openData() { $('ovData').classList.add('show'); refreshDataStatus(); }
@@ -350,6 +350,12 @@ $('fileZip').onchange = async (e) => {
   catch (err) { console.error(err); $('impMsg').textContent = '오류: ' + err.message; }
   e.target.value = '';
 };
+// 개발용: ?dev 로 열면 로컬 서버의 /dist/pack.zip 을 바로 가져오는 버튼 표시
+if (location.search.includes('dev')) {
+  const b = document.createElement('button'); b.className = 'big'; b.textContent = '(dev) /dist/pack.zip 가져오기';
+  b.onclick = async () => { const r = await fetch('/dist/pack.zip'); await importZip({ stream: () => r.body, size: +r.headers.get('content-length') || 1 }); toast('dev import 완료'); };
+  $('btnClearData').before(b);
+}
 $('btnClearData').onclick = async () => { if (!confirm('저장된 음원과 문장을 모두 지울까요?')) return; stopAll(); await idbClear(); DATA = null; bufCache.clear(); refreshHome(); refreshDataStatus(); };
 
 // 설정 overlay

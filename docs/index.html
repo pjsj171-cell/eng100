@@ -43,6 +43,8 @@
 
   /* Now playing */
   .now { margin-top: 12px; background: var(--panel); border-radius: var(--radius); padding: 14px 16px; flex: 1; display: flex; flex-direction: column; min-height: 150px; }
+  .now .steprow { display: flex; justify-content: space-between; align-items: center; }
+  .now .skip { color: var(--dim); font-size: 13px; padding: 4px 8px; border-radius: 8px; background: var(--panel2); }
   .now .step { color: var(--acc); font-size: 13px; font-weight: 600; letter-spacing: .04em; }
   .now .en { font-size: 22px; font-weight: 600; margin: 8px 0 4px; line-height: 1.3; }
   .now .ko { color: var(--dim); font-size: 16px; }
@@ -101,7 +103,7 @@
 </div>
 
 <div class="now">
-  <div class="step" id="npStep">대기 중</div>
+  <div class="steprow"><div class="step" id="npStep">대기 중</div><button class="skip" id="npSkip">다음 단계 ▸</button></div>
   <div class="en" id="npEn">모드를 선택하세요</div>
   <div class="ko" id="npKo"></div>
   <div class="bar"><i id="npBar"></i></div>

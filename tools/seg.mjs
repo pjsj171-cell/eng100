@@ -35,8 +35,11 @@ export async function words(pcm, model='onnx-community/whisper-base.en_timestamp
   const ws = [];
   for (const c of r.chunks) {
     const w = { t0:c.timestamp[0], t1:c.timestamp[1] ?? c.timestamp[0]+0.3, w:c.text.trim() };
+    if (!Number.isFinite(w.t0)) continue;
+    // chunk-overlap artifacts: time jumps backward → rewind and keep the later (more context) version
+    while (ws.length && w.t0 < ws[ws.length-1].t0 - 0.05) ws.pop();
     const p = ws[ws.length-1];
-    if (p && p.w.toLowerCase()===w.w.toLowerCase() && Math.abs(p.t0-w.t0)<0.35) continue; // chunk-overlap duplicate
+    if (p && p.w.toLowerCase()===w.w.toLowerCase() && Math.abs(p.t0-w.t0)<0.35) continue;
     ws.push(w);
   }
   return ws;
@@ -45,7 +48,11 @@ export async function words(pcm, model='onnx-community/whisper-base.en_timestamp
 // sentences from word stream; snap edges to speech regions
 export function unitize(ws, regs, dur) {
   const sents = []; let cur = [];
-  for (const w of ws) { cur.push(w); if (/[.?!]["']?$/.test(w.w)) { sents.push(cur); cur=[]; } }
+  for (const w of ws) {
+    const gap = cur.length ? w.t0 - cur[cur.length-1].t1 : 0, span = cur.length ? w.t0 - cur[0].t0 : 0;
+    if (cur.length && (gap >= 0.6 || (gap >= 0.4 && span >= 2.5))) { sents.push(cur); cur=[]; }   // pause = boundary
+    cur.push(w); if (/[.?!]["']?$/.test(w.w)) { sents.push(cur); cur=[]; }
+  }
   if (cur.length) sents.push(cur);
   const units = sents.map(s => {
     let start = s[0].t0, end = s[s.length-1].t1;
@@ -64,7 +71,9 @@ export function unitize(ws, regs, dur) {
     if (p && (p.end-p.start)<0.9 && (u.start-p.end)<0.3 && !/^\d+\.?$/.test(p.text) && !/^day\b/i.test(p.text)) { p.end=u.end; p.text += ' '+u.text; }
     else merged.push({...u});
   }
-  return merged.map(u=>({start:+u.start.toFixed(2), end:+u.end.toFixed(2), text:u.text}));
+  // drop hallucinations on music (e.g. "B B B B", "[")
+  const junk = u => { const toks = u.text.replace(/[^a-z0-9' ]/gi,' ').trim().split(/\s+/); const uniq = new Set(toks.map(t=>t.toLowerCase())); return !toks[0] || (toks.length>=4 && uniq.size<=2) || toks.filter(t=>t.length<=1).length > toks.length*0.6; };
+  return merged.filter(u=>!junk(u)).map(u=>({start:+u.start.toFixed(2), end:+u.end.toFixed(2), text:u.text}));
 }
 
 export async function segment(file, model) {

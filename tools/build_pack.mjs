@@ -11,12 +11,15 @@ function dayUnits(n) {
   // drop "Day N" announcement pieces at the start
   while (u.length && /^(day\b.*|\d+\.?|day)$/i.test(u[0].text.trim())) u.shift();
   const title = u.shift()?.text ?? '';
-  const mi = u.findIndex(x => /m[ai]n[iy]\s*dialog/i.test(x.text));
-  if (mi < 0) warn.push(`DAY${p3(n)}: mini-dialogue marker not found`);
+  let mi = u.findIndex(x => /m[ai]n[iy]\s*dialog/i.test(x.text));
+  if (mi < 0) {   // fallback: first unit after the jingle gap (~27-37s)
+    mi = u.findIndex((x, i) => i > 0 && x.start > 27 && x.start - u[i-1].end >= 1.5);
+    warn.push(`DAY${p3(n)}: marker by timing → ${mi >= 0 ? u[mi].text : 'NOT FOUND'}`);
+  }
   const units = [];
   u.forEach((x, i) => {
-    if (i === mi) return;
-    const txt = x.text.trim();
+    if (i === mi && /m[ai]n[iy]\s*dialog/i.test(x.text)) return;
+    const txt = x.text.trim().replace(/^([A-Za-z] )+(?=[A-Z])/, '');
     if (mi >= 0 && i < mi && i >= mi-2 && txt.length < 5) return;   // jingle garbage before marker
     if (!/[a-z]/i.test(txt)) return;
     units.push({ s: x.start, e: x.end, t: txt, k: (mi < 0 || i < mi) ? 'x' : 'd' });
@@ -24,24 +27,29 @@ function dayUnits(n) {
   return { title, units };
 }
 
-// ── LT sentence timings: group by gaps ≥1.6s, drop number announcements
-function ltTimes(n) {
-  const u = JSON.parse(fs.readFileSync(`out/stt/LT_day${p2(n)}.json`,'utf8'));
+// ── LT sentence timings by silence: [number] gap [sentence] long-gap ... (text comes from the PDF)
+import { decode16k, speechRegions } from './seg.mjs';
+async function ltTimes(n) {
+  const pcm = await decode16k(RAW + `부가자료/부가자료(3쇄~)/리스닝MP3(3쇄~)/LT_day${p2(n)}.mp3`);
+  const regs = speechRegions(pcm, 16000, { thDb: -46, minSil: 0.45, minSpeech: 0.3 }).filter(r => r.start > 4);   // skip intro jingle
   const groups = []; let g = [];
-  for (let i = 0; i < u.length; i++) {
-    if (g.length && u[i].start - g[g.length-1].end >= 1.6) { groups.push(g); g = []; }
-    g.push(u[i]);
-  }
+  for (const r of regs) { if (g.length && r.start - g[g.length-1].end >= 1.7) { groups.push(g); g = []; } g.push(r); }
   if (g.length) groups.push(g);
-  const sents = groups.map(gr => gr.filter(x => !/^\d+\.?( \d+\.?)?$/.test(x.text.trim()) && /[a-z]/i.test(x.text)))
-                      .filter(gr => gr.length)
-                      .map(gr => ({ s: gr[0].start, e: gr[gr.length-1].end, t: gr.map(x=>x.text).join(' ') }));
-  if (sents.length !== 15) warn.push(`LT_day${p2(n)}: ${sents.length} sentences (expected 15)`);
+  const sents = groups.map(gr => {
+    if (gr.length === 1) {   // number+sentence merged: re-split with a finer silence threshold
+      const a = Math.floor(gr[0].start*16000), b = Math.floor(gr[0].end*16000);
+      const sub = speechRegions(pcm.subarray(a, b), 16000, { thDb: -46, minSil: 0.2, minSpeech: 0.2 });
+      if (sub.length >= 2) return { s: gr[0].start + sub[1].start - 0.1, e: gr[0].end + 0.15 };
+      return null;
+    }
+    return { s: Math.max(0, gr[1].start - 0.1), e: gr[gr.length-1].end + 0.15 };
+  }).filter(Boolean);
+  if (sents.length !== 15) warn.push(`LT_day${p2(n)}: ${sents.length} sentences (expected 15) groups=${groups.map(x=>x.length).join(',')}`);
   return sents;
 }
 
 const lt = JSON.parse(fs.readFileSync('out/lt.json','utf8'));
-const ltT = {}; for (let n=1;n<=20;n++) ltT[n] = ltTimes(n);
+const ltT = {}; for (let n=1;n<=20;n++) ltT[n] = await ltTimes(n);
 
 const days = [];
 for (let n=1;n<=100;n++) {
@@ -49,7 +57,7 @@ for (let n=1;n<=100;n++) {
   const review = lt.filter(x => x.day === n).map(x => {
     const tm = ltT[x.lt][x.item-1];
     if (!tm) { warn.push(`LT_day${p2(x.lt)} item ${x.item}: no timing`); return null; }
-    return { en: x.en, ko: x.ko, audio: `audio/lt/LT${p2(x.lt)}.mp3`, s: tm.s, e: tm.e, koAudio: `audio/ko/D${p3(n)}_${(x.item-1)%3+1}.mp3`, stt: tm.t };
+    return { en: x.en, ko: x.ko, audio: `audio/lt/LT${p2(x.lt)}.mp3`, s: +tm.s.toFixed(2), e: +tm.e.toFixed(2), koAudio: `audio/ko/D${p3(n)}_${(x.item-1)%3+1}.mp3` };
   }).filter(Boolean);
   days.push({ day: n, title, audio: `audio/day/DAY${p3(n)}.mp3`, lecture: `audio/lec/L${p3(n)}.mp3`, units, review });
 }
@@ -74,7 +82,7 @@ const w32 = (b,o,v)=>b.writeUInt32LE(v>>>0,o), w16=(b,o,v)=>b.writeUInt16LE(v,o)
 for (const [name, src] of entries) {
   const data = Buffer.isBuffer(src) ? src : fs.readFileSync(src);
   const nm = Buffer.from(name, 'utf8'), crc = crc32(data);
-  const lh = Buffer.alloc(30); w32(lh,0,0x04034b50); w16(lh,4,20); w16(lh,6,0x0800); w16(lh,8,0); w16(lh,10,0); w16(lh,12,0x21); w32(lh,16,crc); w32(lh,20,data.length); w32(lh,24,data.length); w16(lh,26,nm.length); w16(lh,28,0);
+  const lh = Buffer.alloc(30); w32(lh,0,0x04034b50); w16(lh,4,20); w16(lh,6,0x0800); w16(lh,8,0); w16(lh,10,0); w16(lh,12,0x21); w32(lh,14,crc); w32(lh,18,data.length); w32(lh,22,data.length); w16(lh,26,nm.length); w16(lh,28,0);
   fs.writeSync(fd, lh); fs.writeSync(fd, nm); fs.writeSync(fd, data);
   const ch = Buffer.alloc(46); w32(ch,0,0x02014b50); w16(ch,4,20); w16(ch,6,20); w16(ch,8,0x0800); w16(ch,10,0); w16(ch,12,0); w16(ch,14,0x21); w32(ch,16,crc); w32(ch,20,data.length); w32(ch,24,data.length); w16(ch,28,nm.length); w16(ch,30,0); w16(ch,32,0); w16(ch,34,0); w16(ch,36,0); w32(ch,38,0); w32(ch,42,off);
   cd.push(Buffer.concat([ch, nm]));
