@@ -1,0 +1,21 @@
+{
+  "name": "scratchpad",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.0",
+    "fflate": "^0.8.3",
+    "mpg123-decoder": "^1.0.3",
+    "msedge-tts": "^2.0.7",
+    "music-metadata": "^11.15.0",
+    "pdf-parse": "^2.4.5"
+  }
+}

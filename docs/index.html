@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101418">
+<meta name="mobile-web-app-capable" content="yes">
+<title>영어 100일</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --bg: #101418; --panel: #1a2028; --panel2: #232b35; --fg: #f2f4f7; --dim: #8a94a3;
+    --acc: #4fd1a0; --acc2: #ffb454; --acc3: #6ab7ff; --danger: #ff6b6b;
+    --radius: 18px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, "Pretendard", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif; overscroll-behavior: none; }
+  body { display: flex; flex-direction: column; padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom); user-select: none; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 0 6px; }
+  header h1 { font-size: 15px; font-weight: 600; color: var(--dim); margin: 0; letter-spacing: .02em; }
+  header .icons button { font-size: 22px; padding: 6px 8px; color: var(--dim); }
+
+  /* Day selector */
+  .day { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 0 4px; }
+  .day button { width: 64px; height: 64px; border-radius: 50%; background: var(--panel); font-size: 34px; color: var(--fg); }
+  .day .num { min-width: 150px; text-align: center; }
+  .day .num b { display: block; font-size: 64px; line-height: 1; font-weight: 800; letter-spacing: -.02em; }
+  .day .num small { display: block; color: var(--dim); font-size: 13px; margin-top: 4px; }
+  .title { text-align: center; color: var(--acc2); font-size: 17px; min-height: 22px; margin-bottom: 8px; }
+  .stat { text-align: center; color: var(--dim); font-size: 13px; margin-bottom: 10px; }
+
+  /* Mode buttons */
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .modes button { border-radius: var(--radius); padding: 22px 8px; font-size: 22px; font-weight: 700; background: var(--panel); min-height: 92px; }
+  .modes button span { display: block; font-size: 12px; font-weight: 400; color: var(--dim); margin-top: 6px; }
+  .modes .routine { grid-column: 1 / -1; background: var(--acc); color: #062b1e; min-height: 110px; font-size: 26px; }
+  .modes .routine span { color: #0b4d36; }
+  .modes button:active { filter: brightness(1.15); }
+
+  /* Now playing */
+  .now { margin-top: 12px; background: var(--panel); border-radius: var(--radius); padding: 14px 16px; flex: 1; display: flex; flex-direction: column; min-height: 150px; }
+  .now .step { color: var(--acc); font-size: 13px; font-weight: 600; letter-spacing: .04em; }
+  .now .en { font-size: 22px; font-weight: 600; margin: 8px 0 4px; line-height: 1.3; }
+  .now .ko { color: var(--dim); font-size: 16px; }
+  .now .bar { height: 4px; background: var(--panel2); border-radius: 2px; margin-top: auto; overflow: hidden; }
+  .now .bar i { display: block; height: 100%; width: 0; background: var(--acc3); }
+  .ctl { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 10px; margin: 12px 0 14px; }
+  .ctl button { border-radius: var(--radius); background: var(--panel); font-size: 22px; padding: 16px 0; }
+  .ctl .play { background: var(--acc3); color: #041a33; font-size: 30px; font-weight: 800; }
+  .ctl .skip { font-size: 15px; }
+
+  /* Overlays */
+  .overlay { position: fixed; inset: 0; background: rgba(16,20,24,.96); display: none; flex-direction: column; padding: 24px 20px; overflow: auto; z-index: 10; }
+  .overlay.show { display: flex; }
+  .overlay h2 { margin: 0 0 12px; font-size: 22px; }
+  .overlay p { color: var(--dim); line-height: 1.5; }
+  .overlay .row { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--panel2); }
+  .overlay .row label { font-size: 17px; }
+  .overlay .row .seg { display: flex; gap: 6px; }
+  .overlay .row .seg button { padding: 8px 14px; border-radius: 10px; background: var(--panel); font-size: 16px; }
+  .overlay .row .seg button.on { background: var(--acc); color: #062b1e; font-weight: 700; }
+  .overlay .close { margin-top: auto; padding: 18px; border-radius: var(--radius); background: var(--panel); font-size: 18px; }
+  .overlay .big { padding: 18px; border-radius: var(--radius); background: var(--acc); color: #062b1e; font-size: 18px; font-weight: 700; margin-top: 10px; }
+  .overlay input[type=file] { display: none; }
+  .prog { height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; margin: 10px 0; }
+  .prog i { display: block; height: 100%; width: 0; background: var(--acc); transition: width .2s; }
+  .list { font-size: 15px; line-height: 1.7; margin: 8px 0 16px; }
+  .list .k { color: var(--dim); }
+  .hidden { display: none !important; }
+  .toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: var(--panel2); padding: 10px 18px; border-radius: 12px; font-size: 15px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 20; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>영어회화 100일의 기적</h1>
+  <div class="icons">
+    <button id="btnData" title="자료">📦</button>
+    <button id="btnSettings" title="설정">⚙️</button>
+  </div>
+</header>
+
+<div class="day">
+  <button id="dayMinus">−</button>
+  <div class="num"><b id="dayNum">1</b><small>DAY</small></div>
+  <button id="dayPlus">＋</button>
+</div>
+<div class="title" id="dayTitle"></div>
+<div class="stat" id="dayStat"></div>
+
+<div class="modes">
+  <button class="routine" id="mRoutine">▶ 오늘 루틴<span id="routineDesc"></span></button>
+  <button id="mShadow">쉐도잉<span>문장 듣고 따라 말하기</span></button>
+  <button id="mReview">복습<span>한국어 듣고 영어로</span></button>
+  <button id="mLecture">강의<span>저자 해설</span></button>
+  <button id="mDialog">대화만<span>미니 대화 쉐도잉</span></button>
+</div>
+
+<div class="now">
+  <div class="step" id="npStep">대기 중</div>
+  <div class="en" id="npEn">모드를 선택하세요</div>
+  <div class="ko" id="npKo"></div>
+  <div class="bar"><i id="npBar"></i></div>
+</div>
+<div class="ctl">
+  <button id="cPrev">⏮</button>
+  <button class="play" id="cPlay">▶</button>
+  <button id="cNext">⏭</button>
+</div>
+
+<audio id="player" preload="auto"></audio>
+
+<!-- 자료 관리 -->
+<div class="overlay" id="ovData">
+  <h2>📦 학습 자료</h2>
+  <div id="dataStatus" class="list"></div>
+  <p>PC에서 만든 <b>pack.zip</b>을 폰에 복사한 뒤 아래 버튼으로 불러오세요. 한 번 불러오면 폰 안에 저장되어 오프라인으로 동작합니다.</p>
+  <div class="prog hidden" id="impProg"><i></i></div>
+  <div id="impMsg" class="list"></div>
+  <label class="big" style="text-align:center;display:block">pack.zip 불러오기<input type="file" id="fileZip" accept=".zip,application/zip"></label>
+  <button class="big" id="btnClearData" style="background:var(--panel);color:var(--danger)">저장된 자료 모두 삭제</button>
+  <button class="close" id="closeData">닫기</button>
+</div>
+
+<!-- 설정 -->
+<div class="overlay" id="ovSettings">
+  <h2>⚙️ 설정</h2>
+  <div class="row"><label>쉐도잉 반복 횟수</label><div class="seg" data-key="passes" data-vals="1,2,3,5"></div></div>
+  <div class="row"><label>문장당 재생</label><div class="seg" data-key="reps" data-vals="1,2"></div></div>
+  <div class="row"><label>따라 말할 시간</label><div class="seg" data-key="gap" data-vals="1,1.3,1.6,2"></div></div>
+  <div class="row"><label>복습 범위 (지난 Day)</label><div class="seg" data-key="reviewDays" data-vals="3,5,7,10"></div></div>
+  <div class="row"><label>복습 문장 수</label><div class="seg" data-key="reviewCount" data-vals="10,15,20,30"></div></div>
+  <div class="row"><label>루틴에 강의 포함</label><div class="seg" data-key="lecture" data-vals="first,always,never"></div></div>
+  <p style="font-size:13px">따라 말할 시간 = 문장 길이 × 배수. 루틴 순서: 강의 → 쉐도잉 → 복습. "강의 first"는 그 Day를 처음 할 때만 강의를 넣습니다.</p>
+  <button class="big" id="btnResetProgress" style="background:var(--panel);color:var(--danger)">진도 초기화</button>
+  <button class="close" id="closeSettings">닫기</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="fflate.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
